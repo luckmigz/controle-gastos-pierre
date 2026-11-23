@@ -68,15 +68,24 @@ def conectar_planilha() -> gspread.Worksheet:
     return client.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
 
 
-def buscar_transacoes_pierre(api_key: str) -> list[dict[str, Any]]:
+def buscar_transacoes_pierre(
+    api_key: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
     }
-    url = f"{PIERRE_BASE_URL}/api/v1/transactions"
+    url = f"{PIERRE_BASE_URL}/tools/api/get-transactions"
+    params: dict[str, str] = {}
+    if start_date:
+        params["startDate"] = start_date
+    if end_date:
+        params["endDate"] = end_date
 
     with httpx.Client(timeout=30.0) as client:
-        response = client.get(url, headers=headers)
+        response = client.get(url, headers=headers, params=params)
         response.raise_for_status()
         payload = response.json()
 
