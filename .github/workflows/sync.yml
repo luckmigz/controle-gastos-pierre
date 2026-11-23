@@ -31,4 +31,5 @@ jobs:
           PIERRE_KEY_1: ${{ secrets.PIERRE_KEY_1 }}
           PIERRE_KEY_2: ${{ secrets.PIERRE_KEY_2 }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python sync.py
