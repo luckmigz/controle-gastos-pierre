@@ -78,6 +78,7 @@ def buscar_transacoes_pierre(
         "Accept": "application/json",
     }
     url = f"{PIERRE_BASE_URL}/tools/api/get-transactions"
+    
     params: dict[str, str] = {}
     if start_date:
         params["startDate"] = start_date
