@@ -1,0 +1,34 @@
+name: Sync Pierre to Google Sheets
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # A cada 6 horas (UTC)
+  workflow_dispatch: # Permite rodar manualmente quando quiser
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar sincronização
+        env:
+          PIERRE_BASE_URL: ${{ vars.PIERRE_BASE_URL || 'https://pierre.finance' }}
+          PIERRE_NOME_1: ${{ vars.PIERRE_NOME_1 || 'Lucas' }}
+          PIERRE_NOME_2: ${{ vars.PIERRE_NOME_2 || 'Pessoa 2' }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          GOOGLE_WORKSHEET_NAME: ${{ vars.GOOGLE_WORKSHEET_NAME || 'Transacoes' }}
+          PIERRE_KEY_1: ${{ secrets.PIERRE_KEY_1 }}
+          PIERRE_KEY_2: ${{ secrets.PIERRE_KEY_2 }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: python sync.py
