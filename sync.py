@@ -14,8 +14,8 @@ SHEET_ID = os.environ["GOOGLE_SHEET_ID"].strip()
 WORKSHEET_NAME = os.getenv("GOOGLE_WORKSHEET_NAME", "Gastos totais").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or None
 
-# CORREÇÃO: O modelo correto e atualizado na API é o 1.5-flash
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+# Modelo configurável pela variável GEMINI_MODEL do repositório (a família 1.5 foi descontinuada pelo Google).
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -23,8 +23,8 @@ SCOPES = [
 ]
 
 CATEGORIAS_VALIDAS = (
-    "Comida", "Compras", "Entretenimento", "Assinaturas", "Saúde", 
-    "Transporte", "Tarifas Bancárias", "Pagamentos", "Outros"
+    "Moradia / Contas", "Comida", "Compras", "Entretenimento", "Assinaturas", "Saúde",
+    "Transporte", "Tarifas Bancárias", "Outros"
 )
 
 SUBCATEGORIAS_VALIDAS = (
@@ -32,21 +32,41 @@ SUBCATEGORIAS_VALIDAS = (
     "Marketplaces / Variedades", "Casa / Pets / Eletrônicos", "Jogos / Streaming",
     "Serviços Digitais / Apps", "Combustível / Estacionamento", "Saúde / Farmácia",
     "Tarifas / Impostos", "Fatura Cartão", "Pix / Transferências",
-    "Investimentos (RDB)", "Entradas / Recebimentos", "Outros"
+    "Investimentos (RDB)", "Entradas / Recebimentos", "Aluguel", "Contas da casa",
+    "Seguros", "Transporte", "Transferência interna", "Empréstimo", "Outros"
 )
 
 KEYWORDS_CONTA_CORRENTE = (
     "pix ", "transferência", "transferencia", "compra no débito", "compra no debito",
     "compra débito", "compra debito", "resgate rdb", "aplicação rdb", "aplicacao rdb",
     "pagamento de fatura", "pagamento de imposto", "liquido de vencimento",
-    "líquido de vencimento", "limite convertido"
+    "líquido de vencimento", "limite convertido", "salário", "salario", "consignado",
+    "cofrinho", "rendimento", "crédito em conta", "credito em conta", "devolução de recebimento",
+    "devolucao de recebimento"
+)
+
+# Lançamentos de cartão que são créditos (entram positivos), não compras.
+KEYWORDS_CREDITO_CARTAO = (
+    "pagamento recebido", "estorno", "reembolso", "crédito de parcelamento", "credito de parcelamento"
+)
+
+# Nomes do casal: Pix/transferências entre eles (ou para si mesmo) não são gasto nem renda.
+NOMES_CASAL = tuple(
+    n.strip().lower() for n in os.getenv("NOMES_CASAL", "lucas miguel de matos negri,raissa sanches crevelenti,raíssa sanches crevelenti").split(",") if n.strip()
 )
 
 REGRAS_CLASSIFICACAO: list[tuple[str, str, tuple[str, ...]]] = [
-    ("Outros", "Investimentos (RDB)", ("rdb", "limite convertido")),
-    ("Pagamentos", "Fatura Cartão", ("pagamento de fatura", "pagamento recebido")),
+    ("Empréstimos", "Empréstimo", ("consignado",)),
+    ("Investimentos", "Investimentos (RDB)", ("rdb", "cofrinho")),
+    ("Transferências internas", "Transferência interna", ("limite convertido", "valor adicionado", "reembolso de pix no crédito", "reembolso de pix no credito")),
+    ("Pagamento de fatura", "Fatura Cartão", ("pagamento de fatura", "pagamento recebido")),
+    ("Moradia / Contas", "Aluguel", ("imoveis", "imóveis", "imobiliaria", "imobiliária")),
+    ("Moradia / Contas", "Contas da casa", ("sabesp", "eletropaulo", "enel", "claro", "nucel", "vivo", "tim ")),
+    ("Moradia / Contas", "Seguros", ("seguro",)),
+    ("Comida", "Delivery", ("ifood", "99 food")),
+    ("Transporte", "Transporte", ("uber", "lalamove", "99app", "ituran", "unidas", "mercadocar")),
     ("Outros", "Entradas / Recebimentos", ("pix recebido", "transferência recebida", "transferencia recebida", "liquido de vencimento", "líquido de vencimento", "estorno de pagamento", "crédito de parcelamento")),
-    ("Pagamentos", "Pix / Transferências", ("pix enviado", "pix no crédito", "pix no credito", "transferência enviada", "transferencia enviada")),
+    ("Outros", "Pix / Transferências", ("pix enviado", "pix no crédito", "pix no credito", "transferência enviada", "transferencia enviada")),
     ("Tarifas Bancárias", "Tarifas / Impostos", ("iof", "anual", "tarifa")),
     ("Comida", "Delivery", ("ifd*",)),
     ("Comida", "Mercado / Padaria", ("carrefour", "pao de acucar", "pão de açúcar", "padaria", "oxxo", "minuto pa", "hortus", "frutas", "panificadora")),
@@ -130,7 +150,7 @@ def classificar_por_regras(tx: dict[str, Any], descricao: str) -> tuple[str, str
         (("health", "saude", "saúde", "pharm"), "Saúde"),
         (("transp", "fuel"), "Transporte"),
         (("fee", "tarifa"), "Tarifas Bancárias"),
-        (("pay", "transfer", "pagamento"), "Pagamentos"),
+        (("pay", "transfer", "pagamento"), "Outros"),
     ]
     for chaves, cat in mapa_fallback:
         if any(k in raw_cat for k in chaves): return cat, cat
@@ -167,6 +187,30 @@ def classificar_lote_com_gemini(itens: list[dict[str, Any]]) -> list[dict[str, s
         return []
 
 
+def classificar_tipo(descricao: str, valor_tratado: float, subcategoria: str) -> tuple[str, str]:
+    """Define a coluna Tipo usada pelo Painel e pelo artefato. Retorna (tipo, observação)."""
+    texto = descricao.lower()
+    if "consignado" in texto:
+        return "Empréstimo", ""
+    if any(k in texto for k in ("aplicação rdb", "aplicacao rdb", "resgate rdb", "cofrinho")):
+        return "Investimento", ""
+    if "rendimento" in texto:
+        return "Receita", ""
+    if subcategoria == "Fatura Cartão" or any(k in texto for k in ("pagamento de fatura",)) or texto.strip() == "pagamento recebido":
+        return "Pagamento de fatura", ""
+    if any(k in texto for k in ("valor adicionado", "limite convertido", "reembolso de pix no crédito", "reembolso de pix no credito")):
+        return "Transferência interna", ""
+    if any(n in texto for n in NOMES_CASAL) and any(k in texto for k in ("pix", "transfer")):
+        return "Transferência interna", ""
+    if any(k in texto for k in ("estorno", "reembolso", "devolução", "devolucao")):
+        return "Despesa", "Estorno/reembolso: abate dos gastos"
+    if valor_tratado > 0 and any(k in texto for k in ("salário", "salario", "vencimento", "pix recebido", "transferência recebida", "transferencia recebida", "crédito em conta", "credito em conta")):
+        return "Receita", ""
+    if valor_tratado < 0:
+        return "Despesa", ""
+    return "Revisar", "Entrada positiva sem regra: confirmar o que é"
+
+
 def formatar_nova_linha(tx: dict[str, Any], pessoa: str) -> list[Any] | None:
     tx_id = str(tx.get("id") or tx.get("transactionId") or "").strip()
     if not tx_id: return None
@@ -183,10 +227,39 @@ def formatar_nova_linha(tx: dict[str, Any], pessoa: str) -> list[Any] | None:
     origem = classificar_origem(tx, descricao)
     categoria, subcategoria = classificar_por_regras(tx, descricao)
     valor_raw = float(tx.get("amount", 0) or 0)
-    valor = round(abs(valor_raw), 2) if origem == "Cartão de Crédito" else round(valor_raw, 2)
-    valor_tratado = round(-abs(valor_raw), 2) if origem == "Cartão de Crédito" else round(valor_raw, 2)
+    if origem == "Cartão de Crédito":
+        credito = any(k in descricao.lower() for k in KEYWORDS_CREDITO_CARTAO)
+        valor = round(abs(valor_raw), 2)
+        valor_tratado = round(abs(valor_raw), 2) if credito else round(-abs(valor_raw), 2)
+    else:
+        valor = round(valor_raw, 2)
+        valor_tratado = round(valor_raw, 2)
 
-    return [descricao, parcela_atual, parcela_total, valor, data_br, mes_ano, categoria, origem, valor_tratado, pessoa, tx_id, subcategoria]
+    tipo, obs = classificar_tipo(descricao, valor_tratado, subcategoria)
+    # Mantém Categoria/Subcategoria coerentes com o Tipo para o que não é gasto.
+    categoria, subcategoria = {
+        "Receita": ("Receitas", "Entradas / Recebimentos"),
+        "Transferência interna": ("Transferências internas", "Transferência interna"),
+        "Investimento": ("Investimentos", "Investimentos (RDB)"),
+        "Pagamento de fatura": ("Pagamento de fatura", "Fatura Cartão"),
+        "Empréstimo": ("Empréstimos", "Empréstimo"),
+    }.get(tipo, (categoria, subcategoria))
+    return [descricao, parcela_atual, parcela_total, valor, data_br, mes_ano, categoria, origem, valor_tratado, pessoa, tx_id, subcategoria, tipo, obs]
+
+
+def chave_duplicata(descricao: str, data_br: str, valor_tratado: Any, pessoa: str) -> str:
+    """Chave para achar o mesmo lançamento que o Pierre devolveu com outro ID."""
+    try:
+        if isinstance(valor_tratado, (int, float)):
+            v = f"{abs(float(valor_tratado)):.2f}"
+        else:
+            txt = str(valor_tratado).replace("R$", "").replace("−", "-").replace(" ", "").strip()
+            if "," in txt:
+                txt = txt.replace(".", "").replace(",", ".")
+            v = f"{abs(float(txt or 0)):.2f}"
+    except ValueError:
+        v = str(valor_tratado)
+    return "|".join([re.sub(r"\s+", " ", descricao.lower()).strip(), data_br.strip(), v, pessoa.strip().lower()])
 
 
 def main() -> None:
@@ -195,12 +268,15 @@ def main() -> None:
     # 1. Analisa os dados existentes para achar "Outros" e evitar duplicatas
     dados_planilha = worksheet.get_all_values()
     ids_existentes = set()
+    chaves_existentes = set()
     linhas_outros_antigas = []
     
     for i, row in enumerate(dados_planilha, start=1):
         if i == 1: continue
         if len(row) > 10 and row[10].strip():
             ids_existentes.add(row[10].strip())
+        if len(row) > 9:
+            chaves_existentes.add(chave_duplicata(row[0], row[4], row[8], row[9]))
             
         cat = row[6].strip() if len(row) > 6 else ""
         subcat = row[11].strip() if len(row) > 11 else ""
@@ -215,6 +291,11 @@ def main() -> None:
         for tx in buscar_transacoes_pierre(conta_cfg["api_key"], start_date=PIERRE_START_DATE):
             linha = formatar_nova_linha(tx, conta_cfg["pessoa"])
             if linha and linha[10] not in ids_existentes:
+                chave = chave_duplicata(linha[0], linha[4], linha[8], linha[9])
+                if chave in chaves_existentes:
+                    # Mesmo lançamento com outro ID: entra marcado para revisão, sem contar nos totais.
+                    linha[12], linha[13] = "Revisar", "Possível duplicata (mesma descrição, data, valor e pessoa)"
+                chaves_existentes.add(chave)
                 novas_linhas.append(linha)
                 ids_existentes.add(linha[10])
                 if linha[6] == "Outros" and linha[11] == "Outros":
